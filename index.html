@@ -360,6 +360,9 @@
       <div class="prompt-zh" id="spellPrompt">准备好了吗？</div>
       <div class="hint-en" id="spellHint"></div>
       <input type="text" id="spellInput" placeholder="输入英文单词" autocomplete="off" disabled>
+      <div style="margin-top:14px">
+        <button class="btn" id="spellSubmit" disabled>提交</button>
+      </div>
       <div class="feedback" id="spellFeedback"></div>
     </div>
   </section>
@@ -697,11 +700,28 @@ document.getElementById('wrongClear').addEventListener('click', () => {
 });
 
 /* ========== 发音 ========== */
+let enVoice = null;
+function pickEnVoice() {
+  try {
+    const voices = speechSynthesis.getVoices();
+    enVoice = voices.find(v => /^en-US/i.test(v.lang) && /(Zira|Microsoft|Google|Samantha|Alex)/i.test(v.name))
+      || voices.find(v => /^en-US/i.test(v.lang))
+      || voices.find(v => /^en-GB/i.test(v.lang))
+      || voices.find(v => /^en/i.test(v.lang)) || null;
+  } catch (e) { enVoice = null; }
+}
+if (typeof speechSynthesis !== 'undefined') {
+  pickEnVoice();
+  speechSynthesis.onvoiceschanged = pickEnVoice;
+}
 function speak(text) {
   try {
     speechSynthesis.cancel();
+    pickEnVoice();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-US'; u.rate = 0.85;
+    u.lang = enVoice ? enVoice.lang : 'en-US';
+    if (enVoice) u.voice = enVoice;
+    u.rate = 0.85;
     speechSynthesis.speak(u);
   } catch (e) {}
 }
@@ -740,12 +760,27 @@ document.getElementById('tabs').addEventListener('click', e => {
   if (!btn) return;
   switchView(btn.dataset.view);
 });
-function switchView(v) {
+// setView 只做视图切换（不记录历史）
+function setView(v) {
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   if (v === 'wrong') renderWrong();
   window.scrollTo({ top: 0 });
 }
+// switchView 切换视图并把当前视图写入地址栏 hash，
+// 这样手机上按"返回键"会回退到上一个板块，而不是直接退出页面。
+function switchView(v) {
+  setView(v);
+  try {
+    if (('#' + v) !== location.hash) location.hash = v;
+  } catch (e) {}
+}
+window.addEventListener('hashchange', () => {
+  const v = location.hash.slice(1) || 'home';
+  setView(v);
+});
+// 初始加载：按地址栏 hash 显示对应板块，没有则首页
+setView(location.hash.slice(1) || 'home');
 document.querySelectorAll('[data-jump]').forEach(b => {
   b.addEventListener('click', () => switchView(b.dataset.jump));
 });
@@ -874,20 +909,21 @@ function nextSpell() {
   document.getElementById('spellHint').textContent = `提示：${w.en.length} 个字母`;
   document.getElementById('spellInput').value = '';
   document.getElementById('spellInput').disabled = false;
+  document.getElementById('spellSubmit').disabled = false;
   document.getElementById('spellInput').focus();
   document.getElementById('spellFeedback').textContent = '';
   spellLock = false;
 }
-document.getElementById('spellInput').addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || spellLock) return;
-  e.preventDefault();
+function submitSpell() {
+  if (spellLock) return;
   spellLock = true;
   const w = spellList[spellIdx];
-  const val = e.target.value.trim().toLowerCase();
+  const val = (document.getElementById('spellInput').value || '').trim().toLowerCase();
   const correct = w.en.toLowerCase();
   const dist = levenshtein(val, correct);
   const fb = document.getElementById('spellFeedback');
   document.getElementById('spellInput').disabled = true;
+  document.getElementById('spellSubmit').disabled = true;
   if (dist === 0) {
     spellRight++; state.score += 2;
     fb.textContent = '完全正确！+2 分'; fb.className = 'feedback good';
@@ -911,7 +947,13 @@ document.getElementById('spellInput').addEventListener('keydown', e => {
   btn.textContent = (spellIdx + 1 >= spellList.length) ? '查看结果' : '下一题 →';
   btn.addEventListener('click', () => { spellIdx++; nextSpell(); });
   document.getElementById('spellBox').appendChild(btn);
+}
+document.getElementById('spellInput').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  submitSpell();
 });
+document.getElementById('spellSubmit').addEventListener('click', submitSpell);
 
 /* ========== 选择题 ========== */
 let choiceList = [], choiceIdx = 0, choiceRight = 0, choiceLock = false;
