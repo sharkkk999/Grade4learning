@@ -258,6 +258,20 @@
   .toast.show { opacity: 1; }
 
   .empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 14px; }
+
+  /* ===== 语音提示条 ===== */
+  .tts-tip {
+    background: #FFF4E5; border-bottom: 1px solid #F0D9B5; color: #8A5A00;
+    padding: 10px 16px; font-size: 13px; line-height: 1.5;
+    display: flex; gap: 10px; align-items: center; justify-content: space-between;
+  }
+  .tts-tip button {
+    border: none; background: #8A5A00; color: #fff;
+    padding: 6px 12px; border-radius: 8px; font-size: 12px;
+    cursor: pointer; font-weight: 600; flex-shrink: 0;
+  }
+  .tts-tip-ops { display: flex; gap: 8px; flex-shrink: 0; }
+  .tts-tip-ops button { white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -270,6 +284,14 @@
   </div>
   <div class="star-count" id="starCount">★ 0</div>
 </header>
+
+<div class="tts-tip" id="ttsTip" style="display:none">
+  <span id="ttsTipMsg"></span>
+  <span class="tts-tip-ops">
+    <button id="ttsTipOnline">改用在线语音</button>
+    <button id="ttsTipClose">知道了</button>
+  </span>
+</div>
 
 <nav class="tabs" id="tabs">
   <button data-view="home" class="active">首页</button>
@@ -390,6 +412,11 @@
   <section id="view-sentences" class="view">
     <div class="toolbar">
       <select id="sentUnit"></select>
+      <select id="ttsMode" title="朗读方式">
+        <option value="auto">朗读：自动</option>
+        <option value="system">朗读：系统语音</option>
+        <option value="online">朗读：在线语音</option>
+      </select>
     </div>
     <div class="sentence-list" id="sentList"></div>
   </section>
@@ -701,30 +728,74 @@ document.getElementById('wrongClear').addEventListener('click', () => {
 
 /* ========== 发音 ========== */
 let enVoice = null;
+// 朗读模式：auto 自动 / system 系统语音 / online 在线语音（记忆到本地）
+let ttsMode = 'auto';
+try { ttsMode = localStorage.getItem('en4tts') || 'auto'; } catch (e) {}
 function pickEnVoice() {
   try {
     const voices = speechSynthesis.getVoices();
-    enVoice = voices.find(v => /^en-US/i.test(v.lang) && /(Zira|Microsoft|Google|Samantha|Alex)/i.test(v.name))
+    enVoice = voices.find(v => /^en-US/i.test(v.lang) && /(Zira|Microsoft|Google|Samantha|Alex|Daniel|Aria|Jenny)/i.test(v.name))
       || voices.find(v => /^en-US/i.test(v.lang))
       || voices.find(v => /^en-GB/i.test(v.lang))
       || voices.find(v => /^en/i.test(v.lang)) || null;
   } catch (e) { enVoice = null; }
 }
+function hasSystemEn() {
+  try { return typeof speechSynthesis !== 'undefined' && speechSynthesis.getVoices().some(v => /^en/i.test(v.lang)); }
+  catch (e) { return false; }
+}
 if (typeof speechSynthesis !== 'undefined') {
   pickEnVoice();
-  speechSynthesis.onvoiceschanged = pickEnVoice;
+  speechSynthesis.onvoiceschanged = () => { pickEnVoice(); };
 }
-function speak(text) {
+function speakSystem(text) {
   try {
-    speechSynthesis.cancel();
     pickEnVoice();
+    speechSynthesis.cancel();
+    // iOS / 部分平板：语音可能处于暂停状态，需要先唤醒再朗读，否则没声音
+    try { speechSynthesis.resume(); } catch (e) {}
     const u = new SpeechSynthesisUtterance(text);
     u.lang = enVoice ? enVoice.lang : 'en-US';
     if (enVoice) u.voice = enVoice;
     u.rate = 0.85;
+    u.pitch = 1;
+    u.volume = 1;
+    setTimeout(() => { if (!enVoice) pickEnVoice(); }, 800);
     speechSynthesis.speak(u);
-  } catch (e) {}
+  } catch (e) { toast('系统朗读失败，请改用「在线语音」'); }
 }
+// 在线语音：用联网英文 TTS 合成朗读，不依赖设备自带语音，适合无声的平板
+function speakOnline(text) {
+  try {
+    if (window.__audio) { try { window.__audio.pause(); } catch (e) {} }
+    const url = 'https://api.streamelements.com/kappa/v2/speech?voice=Brian&text=' + encodeURIComponent(text);
+    const a = new Audio(url);
+    window.__audio = a;
+    a.onerror = () => { toast('在线语音播放失败，请检查网络或改用其他模式'); };
+    a.play().catch(() => { toast('在线语音播放失败，请检查网络'); });
+  } catch (e) { toast('在线语音不可用'); }
+}
+function speak(text) {
+  if (ttsMode === 'online') { speakOnline(text); return; }
+  if (ttsMode === 'system') {
+    if (hasSystemEn()) { speakSystem(text); }
+    else { toast('系统没有英文语音，已改用在线语音'); setTtsMode('online'); speakOnline(text); }
+    return;
+  }
+  // auto：有系统英文语音用系统，否则在线
+  if (hasSystemEn()) { speakSystem(text); }
+  else { speakOnline(text); }
+}
+function setTtsMode(m) {
+  ttsMode = m;
+  try { localStorage.setItem('en4tts', m); } catch (e) {}
+  const sel = document.getElementById('ttsMode');
+  if (sel) sel.value = m;
+}
+document.getElementById('ttsMode').addEventListener('change', e => {
+  setTtsMode(e.target.value);
+  toast(e.target.value === 'online' ? '已切换为在线语音' : (e.target.value === 'system' ? '已切换为系统语音' : '已切换为自动'));
+});
 
 /* ========== 工具 ========== */
 function toast(msg) {
@@ -1062,6 +1133,42 @@ updateStars();
 updateWrongBadge();
 initCards();
 renderSentences();
+
+/* ========== 语音自检：安卓平板无声时给出原因 ========== */
+(function ttsSelfCheck() {
+  try {
+    let msg = '';
+    if (ttsMode !== 'online' && typeof speechSynthesis === 'undefined' || !speechSynthesis) {
+      msg = '当前打开方式不支持系统语音。可点下方「改用在线语音」直接朗读（需要联网）。';
+    } else if (ttsMode !== 'online' && !hasSystemEn()) {
+      msg = '设备没有英文系统语音，所以没声音。可点下方「改用在线语音」直接朗读（需要联网），或在系统设置里安装英语语音包。';
+    }
+    if (msg) {
+      document.getElementById('ttsTipMsg').textContent = msg;
+      document.getElementById('ttsTip').style.display = 'flex';
+    }
+  } catch (e) {}
+})();
+document.getElementById('ttsTipClose').addEventListener('click', () => {
+  document.getElementById('ttsTip').style.display = 'none';
+});
+document.getElementById('ttsTipOnline').addEventListener('click', () => {
+  setTtsMode('online');
+  document.getElementById('ttsTip').style.display = 'none';
+  toast('已改用在线语音，点🔊即可朗读');
+});
+// 同步朗读方式下拉框
+try {
+  if (document.getElementById('ttsMode')) document.getElementById('ttsMode').value = ttsMode;
+} catch (e) {}
+// 语音列表异步加载，延迟再查一次
+setTimeout(() => {
+  try {
+    if (ttsMode !== 'online' && hasSystemEn()) {
+      document.getElementById('ttsTip').style.display = 'none';
+    }
+  } catch (e) {}
+}, 1200);
 </script>
 </body>
 </html>
